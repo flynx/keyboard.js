@@ -137,6 +137,36 @@ function doc(text, func){
 }
 
 
+// Get list of applicable modes...
+//
+// XXX elem is not used...
+var getApplicableModes =
+module.getApplicableModes =
+function getApplicableModes(keybindings, modes, elem){
+	return Object.keys(keybindings)
+		.filter(function(title){ 
+
+			if(keybindings[title].pattern != null){
+				var mode = keybindings[title].pattern
+			} else {
+				var mode = title
+			}
+
+			// check if we need to skip this mode...
+			return modes == 'all'
+				// explicit mode match...
+				|| modes == mode
+				// 'any' means we need to check the mode...
+				|| (modes == 'any'
+					// '*' always matches...
+					&& mode == '*'
+					// match the mode...
+					// XXX is this too global???
+					|| $(mode).length != 0)
+		})
+}
+
+
 // Build or normalize a modifier string. 
 //
 // Acceptable argument sets:
@@ -176,6 +206,58 @@ function normalizeModifiers(c, m, a, s){
 		res += /shift/i.test(modifiers) ? (res != '' ? '+shift' : 'shift') : ''
 
 		return res
+}
+
+
+
+// supported action format:
+// 	<actio-name>[!][: <args>][-- <doc>]
+//
+// <args> can contain space seporated:
+// 	- numbers
+// 	- strings
+// 	- non-nested arrays or objects
+//
+// XXX add support for suffix to return false...
+var parseActionCall =
+module.parseActionCall =
+function parseActionCall(txt){
+	// split off the doc...
+	var c = txt.split('--')
+	var doc = (c[1] || '').trim()
+	// the actual code...
+	c = c[0].split(':')
+
+	// action and no default flag...
+	var action = c[0].trim()
+	var no_default = action.slice(-1) == '!'
+	action = no_default ? action.slice(0, -1) : action
+
+	// parse arguments...
+	var args = JSON.parse('['+(
+		((c[1] || '')
+			.match(/"[^"]*"|'[^']*'|\{[^\}]*\}|\[[^\]]*\]|\d+|\d+\.\d*|null/gm) 
+		|| [])
+		.join(','))+']')
+
+	return {
+		action: action,
+		arguments: args,
+		doc: doc,
+		'no-default': no_default,
+	}
+}
+
+
+
+// Event handler wrapper to stop handling keys if check callback does 
+// not pass (returns false)...
+var stoppableKeyboardRepeat = 
+module.stoppableKeyboardRepeat = 
+function(handler, check){
+	return function(evt){
+		return check() && handler(evt)
+	}
 }
 
 
@@ -222,43 +304,6 @@ function dropRepeatingkeys(handler, max_rate){
 	}
 }
 
-
-
-// supported action format:
-// 	<actio-name>[!][: <args>][-- <doc>]
-//
-// <args> can contain space seporated:
-// 	- numbers
-// 	- strings
-// 	- non-nested arrays or objects
-var parseActionCall =
-module.parseActionCall =
-function parseActionCall(txt){
-	// split off the doc...
-	var c = txt.split('--')
-	var doc = (c[1] || '').trim()
-	// the actual code...
-	c = c[0].split(':')
-
-	// action and no default flag...
-	var action = c[0].trim()
-	var no_default = action.slice(-1) == '!'
-	action = no_default ? action.slice(0, -1) : action
-
-	// parse arguments...
-	var args = JSON.parse('['+(
-		((c[1] || '')
-			.match(/"[^"]*"|'[^']*'|\{[^\}]*\}|\[[^\]]*\]|\d+|\d+\.\d*|null/gm) 
-		|| [])
-		.join(','))+']')
-
-	return {
-		action: action,
-		arguments: args,
-		doc: doc,
-		'no-default': no_default,
-	}
-}
 
 
 /* Key handler getter
@@ -354,6 +399,9 @@ function getKeyHandlers(key, modifiers, keybindings, modes, shifted_keys, action
 	shifted_keys = shifted_keys || _SHIFT_KEYS
 	actions = actions || {}
 
+	// XXX too global -- need to pass some context...
+	var applicable_modes = getApplicableModes(keybindings, modes)
+
 	if(typeof(key) == typeof(123)){
 		key = key
 		chr = toKeyName(key)
@@ -388,22 +436,10 @@ function getKeyHandlers(key, modifiers, keybindings, modes, shifted_keys, action
 		}
 
 		// older version compatibility...
-		if(keybindings[title].pattern != null){
-			var mode = keybindings[title].pattern
-		} else {
-			var mode = title
-		}
+		var mode = keybindings[title].pattern || title
 
 		// check if we need to skip this mode...
-		if( !(modes == 'all'
-			// explicit mode match...
-			|| modes == mode
-			// 'any' means we need to check the mode...
-			|| (modes == 'any'
-				// '*' always matches...
-				&& mode == '*'
-				// match the mode...
-				|| $(mode).length != 0))){
+		if(applicable_modes.indexOf(title) < 0){
 			continue
 		}
 
@@ -661,6 +697,7 @@ function getKeyHandlers(key, modifiers, keybindings, modes, shifted_keys, action
  * 		actionNmae!: 1 "2" [3, 4] {5:6, 7:8}
  * 						- same as above but calls event.preventDefault()
  *
+ *		XXX add support for suffix to return false...
  *
  *
  * NOTE: The handler will be called with keybindings as context (this).
