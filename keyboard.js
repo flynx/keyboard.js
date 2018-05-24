@@ -14,7 +14,8 @@ var object = require('lib/object')
 /*********************************************************************/
 
 var MODIFIERS =
-module.MODIFIERS = [ 'ctrl', 'meta', 'alt', 'shift' ]
+//module.MODIFIERS = [ 'ctrl', 'meta', 'alt', 'shift' ]
+module.MODIFIERS = [ 'caps', 'ctrl', 'meta', 'alt', 'shift' ]
 
 
 var KEY_SEPARATORS =
@@ -103,6 +104,34 @@ for(var k in SPECIAL_KEYS){
 }
 
 
+// This is used to identify and correct key notation...
+// NOTE: the keys here are intentionally lowercase...
+var SPECIAL_KEY_ALTERNATIVE_TITLES = {
+	1: '#1', 2: '#2', 3: '#3', 4: '#4', 5: '#5', 
+	6: '#6', 7: '#7', 8: '#8', 9: '#9', 0: '#0',
+
+	ctl: 'Ctrl', control: 'Ctrl',
+
+	'capslock': 'Caps Lock',
+
+	'page up': 'PgUp', 'pageup': 'PgUp',
+
+	'page down': 'PgDown', 'pagedown': 'PgDown',
+
+	insert: 'Ins',
+
+	delete: 'Del',
+
+	'bkspace' : 'Backspace', 'back space' : 'Backspace',
+
+	windows: 'Win',
+}
+var SPECIAL_KEYS_DICT = {}
+for(var k in SPECIAL_KEYS){
+	SPECIAL_KEYS_DICT[SPECIAL_KEYS[k].toLowerCase()] = SPECIAL_KEYS[k]
+}
+
+
 
 /*********************************************************************/
 
@@ -125,14 +154,19 @@ function doc(text, func){
 // 	- numbers
 // 	- strings
 // 	- non-nested arrays or objects
+// 	
+// XXX EXPERIMENTAL...
+// 	This will resolve names to context attributes 
 //
 // XXX should this be here???
 // XXX add support for suffix to return false / stop_propagation...
 // XXX should this handle calls??? 
 // 		i.e. have .call(..) / .apply(..) methods???
+// XXX this is the same as actions.parseStringAction(..), reuse in a logical manner...
 var parseActionCall =
 module.parseActionCall =
-function parseActionCall(txt){
+function parseActionCall(txt, context){
+	context = context || this
 	// split off the doc...
 	var c = txt.split('--')
 	var doc = (c[1] || '').trim()
@@ -145,11 +179,35 @@ function parseActionCall(txt){
 	action = no_default ? action.slice(0, -1) : action
 
 	// parse arguments...
+	/*
 	var args = JSON.parse('['+(
 		((c[1] || '')
 			.match(/"[^"]*"|'[^']*'|\{[^\}]*\}|\[[^\]]*\]|\d+|\d+\.\d*|null/gm) 
 		|| [])
 		.join(','))+']')
+	//*/
+	// XXX EXPERIMENTAL -- is this safe???
+	var args = ((c[1] || '')
+			.match(RegExp([
+				'"[^"]*"',
+				"'[^']*",
+				'`[^`]*`',
+
+				'\\{[^\\}]*\\}',
+				'\\[[^\\]]*\\]',
+
+				'\\d+|\\d+\\.\\d*',
+
+				'[a-zA-Z$@#_][0-9a-zA-Z$@#_]*',
+
+				'null',
+			].join('|'), 'gm'))
+		|| [])
+		.map(function(e){
+			// resolve vars to context attrs...
+			return /^[a-zA-Z$@#_][0-9a-zA-Z$@#_]*$/.test(e) ?
+				(context || {})[e]
+				: JSON.parse(e) })
 
 	return {
 		action: action,
@@ -175,14 +233,24 @@ function parseActionCall(txt){
 var event2key =
 module.event2key =
 function event2key(evt){
-	evt = evt || event
+	evt = evt || window.event
+	// NOTE: we do not care about the jQuery wrapper here...
+	evt = evt.originalEvent || evt
 
 	var key = []
 	evt.ctrlKey && key.push('ctrl')
 	evt.altKey && key.push('alt')
 	evt.metaKey && key.push('meta')
 	evt.shiftKey && key.push('shift')
-	key.push(code2key(evt.keyCode))
+	evt.getModifierState 
+		&& evt.getModifierState('CapsLock') 
+		&& key.push('caps')
+
+	var k = code2key(evt.keyCode)
+
+	// add the key if it's not already in, this can happen if we just 
+	// pressed a modifier key...
+	key.indexOf(k.toLowerCase()) < 0 && key.push(k)
 
 	return key
 }
@@ -211,6 +279,9 @@ function code2key(code){
 var isKey =
 module.isKey = 
 function isKey(key){
+	if(!key || key.length == 0 || key.trim() == ''){
+		return false
+	}
 	var modifiers = MODIFIERS 
 
 	var mod = normalizeKey(splitKey(key))
@@ -242,6 +313,14 @@ function splitKey(key){
 			.filter(function(c){ return c != '' }) }
 
 
+var joinKey =
+module.joinKey = 
+function joinKey(key){
+	return key instanceof Array ? 
+		key.join(KEY_SEPARATORS[0] || '+') 
+		: key }
+
+
 // Normalize key string/array...
 // 
 // NOTE: this will not check if a key is a key use isKey(..) for that.
@@ -268,6 +347,15 @@ function normalizeKey(key){
 
 	var k = key.pop()
 	k = parseInt(k) ? code2key(parseInt(k)) : k
+
+	if(!k){
+		return k
+	}
+
+	// get the propper name...
+	k = SPECIAL_KEY_ALTERNATIVE_TITLES[k.toLowerCase()] || k
+	k = SPECIAL_KEYS_DICT[k.toLowerCase()] || k
+
 	k = modifiers.indexOf(k.toLowerCase()) >= 0 ? 
 		k.toLowerCase() 
 		: k.capitalize()
@@ -276,7 +364,7 @@ function normalizeKey(key){
 
 	return output == 'array' ? 
 		key 
-		: key.join(KEY_SEPARATORS[0] || '+')
+		: joinKey(key)
 }
 
 
@@ -305,7 +393,7 @@ function shifted(key){
 
 	return s == null ? null 
 		: output == 'string' ? 
-			res.join(KEY_SEPARATORS[0] || '+') 
+			joinKey(res)
 		: res
 }
 
@@ -314,6 +402,63 @@ function shifted(key){
 
 /*********************************************************************/
 // Generic keyboard handler...
+// 
+// Key binding format:
+//	{
+//		<section-title>: {
+//			doc: <section-doc>,
+//
+//			// list of keys to drop after this section is done.
+//			//
+//			// Setting this to '*' will drop all keys...
+//			//
+//			// NOTE: these keys will be handled in current section.
+//			// NOTE: these keys will not get propagated to the next 
+//			//		matching section...
+//			// NOTE: it is possible to override this and explicitly pass
+//			//		a key to the next section via 'NEXT' (see below).
+//			drop: [ <key>, ... ] | '*',
+//
+//			// Key mapped to action...
+//			//
+//			// NOTE: the system poses no restrictions on action format,
+//			//		but it is recommended to stick to strings or use the
+//			//		doc(..) wrapper...
+//			<key>: <action>,
+//
+//			// Key mapped to an alias...
+//			//
+//			// An alias is any string that is also a key in bindings, it
+//			// can be just a string or a key, when matching the string of
+//			// aliases will be resolved till either an action (non-alias)
+//			// is found or a loop is detected.
+//			//
+//			// NOTE: in case of a loop, nothing will get called...
+//			<key>: <alias> | <key>,
+//
+//			// Alias-action mapping...
+//			<alias>: <action>,
+//
+//			// Explicitly drop key...
+//			//
+//			// NOTE: this is similar in effect to .drop
+//			<key>: 'DROP',
+//
+//			// Explicitly pass key to next section...
+//			//
+//			// This can be useful when it is needed to drop all keys 
+//			// except for a small sub-group, this can be dune by setting
+//			// .drop to '*' (drop all) and explicitly setting the keys to
+//			// be propagated to 'NEXT'.
+//			//
+//			// NOTE: his takes precedence over .drop 
+//			<key>: 'NEXT',
+//
+//			...
+//		},
+//		...
+//	}
+//
 
 var KeyboardClassPrototype = {
 	service_fields: ['doc', 'drop'],
@@ -323,6 +468,7 @@ var KeyboardClassPrototype = {
 	code2key: code2key,
 	isKey: isKey,
 	splitKey: splitKey,
+	joinKey: joinKey,
 	normalizeKey: normalizeKey,
 	shifted: shifted
 }
@@ -331,7 +477,7 @@ var KeyboardPrototype = {
 	//service_fields: ['doc', 'drop'],
 	special_handlers: {
 		DROP: 'drop key', 
-		NEXT_SECTION: 'handle key in next section',
+		NEXT: 'handle key in next section',
 	},
 
 	// Format:
@@ -349,22 +495,47 @@ var KeyboardPrototype = {
 	// 	}
 	//
 	// Reserved special handlers:
-	// 	- DROP			- drop checking of key
-	// 						NOTE: this will prevent handling next sections
-	// 							for this key.
-	// 	- NEXT_SECTION	- force check next section, this has priority 
-	// 						over .drop
+	// 	- DROP		- drop checking of key
+	// 					NOTE: this will prevent handling next sections
+	// 						for this key.
+	// 	- NEXT		- force check next section, this has priority 
+	// 					over .drop
 	//
+	// NOTE: if .__keyboard is set to a function, it will be used both as
+	// 		a getter and as a setter via the .keyboard prop, to overwrite
+	// 		write to .__keyboard directly...
 	__keyboard: null,
 	get keyboard(){
 		return this.__keyboard instanceof Function ? 
 			this.__keyboard() 
 			: this.__keyboard },
 	set keyboard(value){
-		this.__keyboard = value },
+		if(this.__keyboard instanceof Function){
+			this.__keyboard(value) 
+		} else {
+			this.__keyboard = value
+		}
+	},
 
 	// XXX is this needed???
 	//context: null,
+
+
+	// string handler parser...
+	// 
+	// Return format:
+	// {
+	//		action: <str>,
+	//		arguments: <array>,
+	//		doc: <str> || null,
+	//		no_default: <bool>,
+	//		stop_propagation: <bool>,
+	// }
+	//
+	// XXX should this be a Keyboard thing or a context thing???
+	// XXX revise name...
+	parseStringHandler: parseActionCall,
+
 
 	// utils...
 	event2key: KeyboardClassPrototype.event2key,
@@ -372,6 +543,7 @@ var KeyboardPrototype = {
 	code2key: KeyboardClassPrototype.code2key,
 	shifted: KeyboardClassPrototype.shifted,
 	splitKey: KeyboardClassPrototype.splitKey,
+	joinKey: KeyboardClassPrototype.joinKey,
 	normalizeKey: KeyboardClassPrototype.normalizeKey,
 	isKey: KeyboardClassPrototype.isKey,
 
@@ -383,11 +555,57 @@ var KeyboardPrototype = {
 	merge: function(){
 	},
 
+
+	// Sort modes...
+	//
+	// 	Sort via cmp function...
+	// 	.sortModes(func)
+	// 		-> this
+	//
+	// 	Sort to the same order as list...
+	// 	.sortModes(list)
+	// 		-> this
+	//
+	//
+	// NOTE: calling this with no arguments will have no effect.
+	//
+	// XXX should this update the kb in-place???
+	sortModes: function(cmp){
+		var ordered = {}
+		var bindings = this.keyboard
+
+		if(cmp == null){
+			return
+		}
+
+		cmp = cmp instanceof Function ?
+			Object.keys(bindings).sort(cmp)
+			: cmp
+				.concat(Object.keys(bindings))
+				.unique()
+
+		cmp
+			.forEach(function(mode){
+				ordered[mode] = bindings[mode]
+			})
+
+		// reorder only if we moved all the modes...
+		if(Object.keys(bindings).length == Object.keys(ordered).length){
+			this.keyboard = ordered
+		}
+
+		return this
+	},
+
 	// Get keys for handler...
 	//
 	// 	List all handlers...
 	// 	.keys()
 	// 	.keys('*')
+	//		-> keys
+	//
+	// 	List only applicable handlers...
+	// 	.keys('?')
 	//		-> keys
 	//
 	//	List keys for handler...
@@ -417,6 +635,10 @@ var KeyboardPrototype = {
 	// NOTE: this will also return non-key aliases...
 	// NOTE: to match several compatible handlers, pass a list of handlers,
 	// 		the result for each will be merged into one common list.
+	//
+	// XXX drop/DROP/NEXT handling need more testing...
+	// XXX this and .handler(..) in part repeat handling dropped keys, 
+	// 		can we unify this???
 	keys: function(handler){
 		var that = this
 		var res = {}
@@ -427,7 +649,7 @@ var KeyboardPrototype = {
 
 		handler = arguments.length > 1 ? [].slice.call(arguments)
 			: handler == null ? '*'
-			: handler == '*' || handler instanceof Function ? handler
+			: handler == '*' || handler == '?' || handler instanceof Function ? handler
 			: handler instanceof Array ? handler 
 			: [handler]
 
@@ -435,10 +657,10 @@ var KeyboardPrototype = {
 			mod = mod || []
 			if(key in rev){
 				rev[key].forEach(function(k){
-					k = that.normalizeKey(mod
-						.concat(that.splitKey(k))
-						.unique()
-						.join(key_separators[0]))
+					k = that.normalizeKey(
+						that.joinKey(mod
+							.concat(that.splitKey(k))
+							.unique()))
 					res.indexOf(k) < 0 
 						&& res.push(k)
 						&& walkAliases(res, rev, bindings, k, mod)
@@ -446,8 +668,21 @@ var KeyboardPrototype = {
 			}
 		}
 
+		var modes = handler == '?' ? this.modes() : '*'
+		var drop = []
+		var next = []
+
 		Object.keys(keyboard).forEach(function(mode){
+			// skip non-applicable modes...
+			if(modes != '*' && modes.indexOf(mode) < 0){
+				return
+			}
+
 			var bindings = keyboard[mode]
+
+			if(handler == '?'){
+				next = next.concat(bindings.NEXT || [])
+			}
 
 			// build a reverse index...
 			var rev = {}
@@ -466,7 +701,8 @@ var KeyboardPrototype = {
 				})
 
 			var seen = []
-			var handlers = handler == '*' ?  Object.keys(rev) 
+			var handlers = handler == '*' || handler == '?' ?  
+					Object.keys(rev) 
 				: handler instanceof Function ? 
 					Object.keys(rev)
 						.filter(handler)
@@ -474,6 +710,19 @@ var KeyboardPrototype = {
 
 			handlers
 				.forEach(function(h){
+					if(handler == '?'&& h == 'NEXT'){
+						return
+					}
+
+					var keys = (rev[h] || []).map(that.normalizeKey.bind(that))
+
+					if(handler == '?' &&  h == 'DROP'){
+						drop = drop == '*' ?  '*' : drop.concat(keys)
+						next = next
+							.filter(function(k){ return keys.indexOf(k) >= 0 })
+						return
+					}
+
 					var keys = (rev[h] || []).map(that.normalizeKey.bind(that))
 
 					// find all reachable keys from the ones we just found in reverse...
@@ -493,11 +742,29 @@ var KeyboardPrototype = {
 							seen.push(seen)
 						})
 
+					if(handler == '?'){
+						keys = keys
+							.filter(function(key){ 
+								var k = that.splitKey(key)
+								return next.indexOf(key) >= 0
+									|| next.indexOf(k) >= 0
+									|| (drop != '*' 
+										&& drop.indexOf(key) < 0
+										&& drop.indexOf(k) < 0) 
+							})
+					}
+
 					if(keys.length > 0){
 						var m = res[mode] = res[mode] || {}
 						m[h] = keys
 					}
 				})
+
+			if(handler == '?'){
+				drop = drop == '*' || bindings.drop == '*' ? 
+					'*' 
+					: drop.concat(bindings.drop || [])
+			}
 		})
 
 		return res
@@ -585,6 +852,9 @@ var KeyboardPrototype = {
 	// 	- search for key code without modifiers
 	// 		- if an alias is found it is first checked with and then 
 	// 			without modifiers
+	//
+	// XXX this and .keys('?') in part repeat handling dropped keys, 
+	// 		can we unify this???
 	handler: function(mode, key, handler){
 		var that = this
 		var keyboard = this.keyboard
@@ -598,8 +868,7 @@ var KeyboardPrototype = {
 			mode = '*'
 		}
 
-
-		var genKeys = function(key, shift_key){
+		var joinKeys = function(key, shift_key){
 			// match candidates...
 			return key_separators
 				// full key...
@@ -610,6 +879,47 @@ var KeyboardPrototype = {
 						.map(function(s){ return shift_key.join(s) }) 
 					: [])
 	   			.unique() }
+		// NOTE: the generated list is in the following order:
+		// 		- longest chain first
+		// 		- shifted keys first
+		// 		- modifiers are skipped in order, left to right
+		// XXX carefully revise key search order...
+		var keyCombinations = function(key, shift_key, remove_single_keys){
+			if(key.length <= 1){
+				//return shift_key ? [key, shift_key] : [key]
+				return key 
+			}
+			var k = remove_single_keys ? 1 : 0 
+			// generate recursively, breadth first...
+			var _combinations = function(level, res){
+				var next = []
+				level
+					.map(function(elem){
+						var c = elem.join('+++')
+						res.indexOf(c) < 0
+							&& res.push(c)
+							&& elem
+								.slice(0, -1)
+								.map(function(_, i){
+									var s = elem.slice()
+									s.splice(i, 1)
+									// NOTE: we do not include single keys
+									// 		as they are searched separately...
+									//s.length > 0 
+									s.length > k 
+										&& next.push(s)
+								})
+					})
+				next.length > 0 
+					&& _combinations(next, res)
+				return res
+			}
+			return _combinations(shift_key && shift_key.length > 0 ?
+				[key, shift_key] 
+				: [key], [])
+					.map(function(e){ return joinKeys(e.split(/\+\+\+/g)) })
+					.reduce(function(a, b){ return a.concat(b) }, [])
+		}
 		var walkAliases = function(bindings, handler, modifiers){
 			var seen = []
 			var modifiers = modifiers || []
@@ -619,9 +929,10 @@ var KeyboardPrototype = {
 
 				handler = modifiers
 						.filter(function(m){
-							return handler.indexOf(m) < 0
-								&& seen.indexOf(m+handler) < 0
-								&& m+handler in bindings })
+							return handler instanceof Function 
+								|| (handler.indexOf(m) < 0
+									&& seen.indexOf(m+handler) < 0
+									&& m+handler in bindings) })
 						.map(function(m){ return m+handler })[0]
 					|| handler
 
@@ -640,7 +951,13 @@ var KeyboardPrototype = {
 		var shift_key = this.shifted(key)
 
 		// match candidates...
-		var keys = genKeys(key, shift_key).unique()
+		//var keys = joinKeys(key, shift_key).unique()
+		// NOTE: we are skipping single keys from list as they are searched
+		// 		separately...
+		var keys = keyCombinations(key, shift_key, true)
+
+		// XXX
+		//console.log(keys, '--', joinKeys(key, shift_key).unique())
 
 		// get modes...
 		var modes = mode == '*' ? Object.keys(keyboard)
@@ -654,7 +971,8 @@ var KeyboardPrototype = {
 			var k = key.slice(-1)[0]
 			var c = this.key2code(k) 
 
-			var mod = genKeys(key.slice(0, -1).concat(''))
+			//var mod = joinKeys(key.slice(0, -1).concat(''))
+			var mod = keyCombinations(key.slice(0, -1).concat(''), null, true)
 
 			var drop = mode == 'test' || mode == '?'
 			for(var i=0; i < modes.length; i++){
@@ -688,7 +1006,9 @@ var KeyboardPrototype = {
 				// if key in .drop then ignore the rest...
 				if(drop 
 						// explicit go to next section...
-						&& handler != 'NEXT_SECTION'
+						&& (!handler 
+							|| (typeof(handler) == typeof('str') 
+								&& handler.slice(0, 4) != 'NEXT'))
 						&& (bindings.drop == '*'
 							// XXX should this be more flexible by adding a
 							// 		specific key combo?
@@ -718,7 +1038,7 @@ var KeyboardPrototype = {
 
 				// set handler if given...
 				if(handler && handler != ''){
-					keyboard[mode][key] = handler
+					keyboard[mode][that.joinKey(key)] = handler
 				}
 			})
 		}
@@ -768,9 +1088,16 @@ var KeyboardWithCSSModesPrototype = {
 		context = context || this.context
 		return !pattern 
 			|| pattern == '*' 
-			// XXX can we join these into one search???
-			|| context.is(pattern)
-			|| context.find(pattern).length > 0
+			// jQuery...
+			|| (context.is ? 
+				(context.is(pattern)
+					|| context.find(pattern).length > 0)
+				: false)
+			// Vanilla JS...
+			|| (context.matches ? 
+				(context.matches(pattern)
+					|| !!context.querySelector(pattern))
+				: false)
 	},
 
 	__init__: function(keyboard, context){
@@ -802,6 +1129,30 @@ KeyboardWithCSSModes.prototype.__proto__ = Keyboard.prototype
 
 // Base event handler wrapper of Keyboard...
 //
+// This will produce a handler that can be used in one of two ways:
+// 	- event handler
+// 		- an event is passed as the only argument 
+// 		- the function can be used directly as an event handler
+// 	- direct key handler
+// 		- a key and optionally a no_match handler are passed
+// 		
+// 	Example:
+// 		var handler = makeKeyboardHandler(kb, null, action)
+// 		
+// 		// event handler...
+// 		$(window).keydown(handler)
+// 		
+// 		// used directly...
+// 		handler('ctrl_C', function(k){ console.log('Not bound:', k) })
+// 		
+// NOTE: the handler will also set the .capslock attribute on the 
+// 		keyboard object and update it on each key press...
+// NOTE: if .capslock is false means that either it is not on or 
+// 		undetectable...
+// NOTE: before any key is pressed the .capslock is set to undefined
+// 
+// XXX not sure if handler calling mechanics should be outside of the 
+// 		Keyboard object...
 var makeKeyboardHandler =
 module.makeKeyboardHandler =
 function makeKeyboardHandler(keyboard, unhandled, actions){
@@ -810,12 +1161,22 @@ function makeKeyboardHandler(keyboard, unhandled, actions){
 		keyboard 
 		//: Keyboard(keyboard, checkGlobalMode)
 		: Keyboard(keyboard)
+	kb.capslock = undefined
 
-	return function(evt){
-		var res = undefined
+	return function(key, no_match){
+		no_match = no_match || unhandled
 		var did_handling = false
+		var evt = window.event
+		var res
 
-		var key = kb.event2key(evt)
+		//if(key instanceof Event || key instanceof $.Event){
+		if(typeof(key) != typeof('str')){
+			evt = key
+			key = kb.event2key(evt)
+
+			kb.capslock = key.indexOf('caps') >= 0
+		}
+
 		var handlers = kb.handler('test', key)
 
 		Object.keys(handlers).forEach(function(mode){
@@ -830,32 +1191,83 @@ function makeKeyboardHandler(keyboard, unhandled, actions){
 				res = handler.call(actions)
 
 			// action call syntax...
-			} else {
-				var h = parseActionCall(handler)
+			// XXX should this be a Keyboard thing or a context thing???
+			} else if(actions.parseStringHandler || kb.parseStringHandler){
+			//} else if(kb.parseStringHandler){
+				var h = (actions.parseStringHandler || kb.parseStringHandler)(handler, actions)
+				//var h = kb.parseStringHandler(handler)
 
 				if(h && h.action in actions){
 					did_handling = true
 
-					h.no_default 
+					evt 
+						&& h.no_default 
 						&& evt.preventDefault()
 
 					// call the handler...
-					res = actions[h.action].apply(actions, h.args)
+					res = actions[h.action].apply(actions, h.arguments)
 
-					if(h.stop_propagation){
-						res = false
-						evt.stopPropagation()
-					}
+					evt 
+						&& h.stop_propagation
+						&& evt.stopPropagation()
+						&& (res = false)
 				} 
 			}
 		})
 
-		unhandled 
+		no_match 
 			&& !did_handling 
-			&& unhandled.call(actions, evt)
+			&& no_match.call(actions, evt, key)
 
 		return res
 	}
+}
+
+
+
+//---------------------------------------------------------------------
+// Pausable base event handler wrapper of Keyboard...
+//
+// This is the same as .makeKeyboardHandler(..) but adds ability to 
+// pause repeating key handling...
+// 
+// This will extend the keyboard object by adding:
+// 		.pauseRepeat() 		- will pause repeating keys...
+// 		
+// XXX should we drop only when the same key is repeating or any keys 
+// 		repeating (as is now)???
+var makePausableKeyboardHandler =
+module.makePausableKeyboardHandler =
+function makePausableKeyboardHandler(keyboard, unhandled, actions, check_interval){
+
+	var kb = keyboard instanceof Keyboard ? 
+		keyboard 
+		//: Keyboard(keyboard, checkGlobalMode)
+		: Keyboard(keyboard)
+
+	kb.pauseRepeat = function(){
+		this.__repeat_pause_timeout
+			&& clearTimeout(this.__repeat_pause_timeout)
+
+		this.__repeat_pause_timeout = setTimeout(
+			function(){
+				delete kb.__repeat_pause_timeout 
+			},
+			(check_interval instanceof Function ?
+				check_interval.call(actions) 
+				: (check_interval || 100)))
+	}
+
+
+	return stoppableKeyboardRepeat(
+		makeKeyboardHandler(kb, unhandled, actions), 
+		function(){
+			if(kb.__repeat_pause_timeout){
+				kb.pauseRepeat()
+				return false
+			}
+			return true
+		})
 }
 
 
